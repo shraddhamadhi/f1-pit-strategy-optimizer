@@ -1,10 +1,11 @@
 import fastf1
 import pandas as pd
+import requests
+import os
 from sqlalchemy.orm import Session # Open database session
 from sqlalchemy import select
 from database import engine # From database.py
-from models import Race, Lap, PitStop, SafetyCar
-import os
+from models import Race, Lap, PitStop, SafetyCar, Interval
 
 # Absolute path
 cache_path = os.path.join(os.path.dirname(__file__), 'data', 'cache')
@@ -14,8 +15,32 @@ fastf1.Cache.enable_cache(cache_path)
 
 # get_session(year, round_number, session_type)
 
+# Gets the OpenF1 session key for a given race
+def get_openf1_session_key(year, round_number):
+    url = f"https://api.openf1.org/v1/sessions?year={year}&session_name=Race"
+    response = requests.get(url) # HTTP GET request to OpenF1
+    sessions = response.json() # Converts the response from JSON into Python list of dictionaries - each item in the list is one race session
+    return sessions[round_number - 1]['session_key'] if sessions else None # sessions[0] is round 1
+
+# Fetches interval data from OpenF1 for a given session
+# Returns gap to car ahead and position for each driver every 4 seconds
+def fetch_openf1_intervals(session_key):
+    url = f"https://api.openf1.org/v1/intervals?session_key={session_key}"
+    response = requests.get(url)
+    return response.json()
+
+# Fetches driver number to three letter acronym mapping from OpenF1 per session
+# Link OpenF1 interval data (driver_number) to FastF1 data (three letter code)
+def get_driver_mapping(session_key):
+    url = f"https://api.openf1.org/v1/drivers?session_key={session_key}"
+    response = requests.get(url)
+    drivers = response.json()
+    
+    # Build a dictionary: {driver_number: name_acronym} - {1: 'VER', 44: 'HAM', 16: 'LEC'}
+    return {d['driver_number']: d['name_acronym'] for d in drivers}
+
 # Fetch race data for given year and round number from FastF1 and stores it in PostgreSQL database
-# Saves...
+# Saves race info, lap times, pit stops, safety car periods, and intervals
 def fetch_race(year, round_number):
     # Loading 2024 round 1...
     print(f"Loading {year} round {round_number}...")
@@ -68,60 +93,111 @@ def fetch_race(year, round_number):
                 compound = lap['Compound'] if pd.notna(lap['Compound']) else None, # SOFT, MEDIUM, HARD
                 tyre_life = int(lap['TyreLife']) if pd.notna(lap['TyreLife']) else None, # Laps on this tire
                 stint = int(lap['Stint']) if pd.notna(lap['Stint']) else None # Which stint number
-            )   
-            )
+            ))
         
         print("Saved laps")
 
         # Save pit stops:
+        print("Saving pit stops...")
+        # 'laps' DataFrame has PitInTime column - most laps are empty (no pit stop)
+        pit_laps = laps[laps['PitInTime'].notna()] # Only laps where driver ptited
 
+        # Loop through each pit stop lap
+        for _, lap in pit_laps.iterrows():
+            # PitOutTime is on the next lap, not the same lap as PitInTime
+            # Get the next lap for this driver
+            # Filters the entire laps DataFrame to find the next lap for specific driver
+            next_lap = laps[
+                (laps['Driver'] == lap['Driver']) & # Same driver
+                (laps['LapNumber'] == lap['LapNumber'] + 1) # Lap number is current lap + 1
+            ]
+            
+            # not next_nap.empty - next lap exists
+            # pd.notna(next_lap.iloc[0]['PitOutTime']) - PitOutTime exists on that lap
+            # .iloc[0] - gets the first (and only) row from the filtered result
+            if not next_lap.empty and pd.notna(next_lap.iloc[0]['PitOutTime']):
+                # Get first row from the next lap DataFrame and give PitOutTime value
+                pit_out = next_lap.iloc[0]['PitOutTime']
+                # Subtract PitInTime from PitOutTime (next lap)
+                pit_duration = (pit_out - lap['PitInTime']).total_seconds()
+            else:
+                pit_duration = None
+            
+            # Create new PitStop object
+            db.add(PitStop(
+                race_id = race.id,
+                driver = lap['Driver'],
+                lap_number_pitted = int(lap['LapNumber']),
+                pit_duration_seconds = pit_duration
+            ))
 
-
-
-
+        print("Pit stops saved")
 
         # Save safety cars:
+        print("Saving safety cars...")
+        track_status = session.track_status # track_status object - green flag, yellow flag, SC, VSC, red flag
+        # Active safety car period?
+        sc_start = None
+        sc_type = None
 
+        # Loop through each status change
+        # Status = status code, lap = lap which it happened on
+        for _, row in track_status.iterrows():
+            status = row['Status']
+            lap = row['Lap'] if 'Lap' in row else None
 
+            # 4 = Safety Car, 6 = Virtual Safety Car
+            # If not already tracking a safety car period, record the start lap and type
+            if status in ['4', '6'] and sc_start is None:
+                sc_start = lap
+                sc_type = 'SC' if status == '4' else 'VSC'
 
+            # 1 = Green flag - safety car period has ended
+            # Save safety card period with start and end lap
+            elif status == '1' and sc_start is not None:
+                db.add(SafetyCar(
+                    race_id = race.id,
+                    start_lap = sc_start,
+                    end_lap = lap,
+                    sc_type = sc_type
+                ))  
 
+                # Reset for next safety car
+                sc_start = None
+                sc_type = None
+    
+        print("Safety cars saved")
 
-        # Save intervals:
+        # Save intervals from F1:
+        print("Saving intervals...")
+        session_key = get_openf1_session_key(year, round_number) # Gets OpenF1 session key for this race
+        driver_mapping = get_driver_mapping(session_key) # Gets the dictionary mapping driver numbers to three letter codes for this specific race
+        intervals = fetch_openf1_intervals(session_key) # Fetches all interval readings for this race
 
+        for interval in intervals: # Loops through each interval reading
+            # Convert driver number to three letter code using mapping
+            driver_number = interval['driver_number'] # Gets the driver number from this reading
+            driver = driver_mapping.get(driver_number) # Looks up driver number in mapping: 1 -> 'VER'
+
+            # Interval field is gap to car ahead - None if leading or lapped
+            # interval['interval] is gap to car ahead in seconds
+            if interval['interval'] not in [None, 'None', '+1 LAP']:
+                gap = float(interval['interval'])
+            else:
+                gap = None
+
+            # Interval object
+            db.add(Interval(
+                race_id = race.id,
+                driver_number = driver_number,
+                driver = driver,
+                timestamp = interval['date'],
+                gap_to_ahead = gap,
+                position = None
+            ))
+        
+        print("Intervals saved")
 
         db.commit()
 
 fetch_race(2024, 1)
-
-
-"""
-
-# Fetch race data for given year and round number from FastF1 and stores it in PostgreSQL database
-# Saves race info, lap times, pit stops, and safety car periods
-def fetch_store_race(year, round_number):
-    # Load race session from FastF1
-    print(f"Loading {year} round {round_number}...")
-    session = fastf1.get_session(year, round_number, 'R')
-    session.load
-
-    track_name = session.event['EventName']
-    print(f"Track: {track_name}")
-
-    with Session(engine) as db:
-
-        # Save race to races table
-        race = Race(
-            year = year,
-            round_number = round_number,
-            track_name = track_name
-        )
-
-        db.add(race)
-        db.flush() # Flush to get the race id before saving related data
-
-        # Save laps
-        laps = session.laps
-        for _, lap in laps.itterows():
-            lap_time = lap['LapTime'].total_seconds
-
-"""

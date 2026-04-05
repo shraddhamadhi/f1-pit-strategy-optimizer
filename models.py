@@ -58,6 +58,7 @@ class Interval(Base):
     id = Column(Integer, primary_key=True)
     race_id = Column(Integer, ForeignKey('races.id'), nullable=False) # Links interval to specific race
     driver_number = Column(Integer, nullable=False)
+    driver = Column(String, nullable=True) # three letter code
     timestamp = Column(String, nullable=False)  # UTC datetime string from OpenF1
     gap_to_ahead = Column(Float, nullable=True)  # Gap to car ahead in seconds, null if leading
     position = Column(Integer, nullable=True)  # Race position at this moment
