@@ -10,7 +10,7 @@ load_dotenv()
 def get_engine():
     # Build PostgreSQL connection URL using password from .env
     url = f"postgresql://postgres:{os.getenv('DB_PASSWORD')}@localhost:5432/f1_strategy"
-    engine = create_engine(url, echo = True)
+    engine = create_engine(url, echo = False)
     return engine
 
 # Create instance of engine
@@ -26,4 +26,3 @@ test_connection()
 
 # Creates all tables in PostgreSQL if they don't already exist
 Base.metadata.create_all(engine)
-

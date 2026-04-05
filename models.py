@@ -11,7 +11,7 @@ class Race(Base):
 
     id = Column(Integer, primary_key=True)
     year = Column(Integer, nullable=False)
-    round_number = Column(Integer, nullable=False)
+    round_number = Column(Integer, nullable=False) # which race in season
     track_name = Column(String, nullable=False)
 
 # Represents a single lap driven by a driver in one race
@@ -49,3 +49,16 @@ class SafetyCar(Base):
     start_lap = Column(Integer, nullable=False)
     end_lap = Column(Integer, nullable=True) # SC active at end of race?
     sc_type = Column(String, nullable=False) # SC, VSC
+
+# Represents a real-time interval reading from OpenF1
+# Stores gap to car ahead and race position every 4 seconds
+class Interval(Base):
+    __tablename__ = 'intervals'
+
+    id = Column(Integer, primary_key=True)
+    race_id = Column(Integer, ForeignKey('races.id'), nullable=False) # Links interval to specific race
+    driver_number = Column(Integer, nullable=False)
+    driver = Column(String, nullable=True) # three letter code
+    timestamp = Column(String, nullable=False)  # UTC datetime string from OpenF1
+    gap_to_ahead = Column(Float, nullable=True)  # Gap to car ahead in seconds, null if leading
+    position = Column(Integer, nullable=True)  # Race position at this moment
