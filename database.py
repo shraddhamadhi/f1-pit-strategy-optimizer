@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
+from models import Base
 
 # Load environment vars from .env
 load_dotenv()
@@ -22,3 +23,7 @@ def test_connection():
         print("Connection successful")
 
 test_connection()
+
+# Creates all tables in PostgreSQL if they don't already exist
+Base.metadata.create_all(engine)
+
