@@ -27,6 +27,7 @@ class Lap(Base):
     compound = Column(String, nullable=True) # SOFT, MEDIUM, HARD
     tyre_life = Column(Integer, nullable=True) # How many laps tire has been on the car
     stint = Column(Integer, nullable=True) # Stint 1 is before first pit stop, stint 2 is after, etc.
+    is_pit_lap = Column(Integer, nullable=False, default=0) # 1 if driver pitted this lap
 
 # Represents a single pit stop made by a driver during the race
 # Stores which lap they pitted and how long the stop took

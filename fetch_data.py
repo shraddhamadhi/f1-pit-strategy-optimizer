@@ -15,12 +15,25 @@ fastf1.Cache.enable_cache(cache_path)
 
 # get_session(year, round_number, session_type)
 
-# Gets the OpenF1 session key for a given race
+# Gets the OpenF1 session key for a given race by matching the country name from FastF1 to the correct OpenF1 session
 def get_openf1_session_key(year, round_number):
+    # Get country name from FastF1 for this round
+    event = fastf1.get_event(year, round_number)
+    country = event['Country']
+
+    # Get all race sessions for this year from OpenF1
     url = f"https://api.openf1.org/v1/sessions?year={year}&session_name=Race"
     response = requests.get(url) # HTTP GET request to OpenF1
     sessions = response.json() # Converts the response from JSON into Python list of dictionaries - each item in the list is one race session
-    return sessions[round_number - 1]['session_key'] if sessions else None # sessions[0] is round 1
+    
+    print(f"Available countries: {[s.get('country_name') for s in sessions]}")
+
+    # Match by country name
+    for s in sessions:
+        if s.get('country_name', '').lower() == country.lower():
+            return s['session_key']
+        
+    return None
 
 # Fetches interval data from OpenF1 for a given session
 # Returns gap to car ahead and position for each driver every 4 seconds
@@ -92,7 +105,8 @@ def fetch_race(year, round_number):
                 lap_time_seconds = lap_time, # Lap duration in seconds
                 compound = lap['Compound'] if pd.notna(lap['Compound']) else None, # SOFT, MEDIUM, HARD
                 tyre_life = int(lap['TyreLife']) if pd.notna(lap['TyreLife']) else None, # Laps on this tire
-                stint = int(lap['Stint']) if pd.notna(lap['Stint']) else None # Which stint number
+                stint = int(lap['Stint']) if pd.notna(lap['Stint']) else None, # Which stint number
+                is_pit_lap = 1 if pd.notna(lap['PitInTime']) else 0  # 1 if pitted this lap
             ))
         
         print("Saved laps")
@@ -181,10 +195,10 @@ def fetch_race(year, round_number):
 
             # Interval field is gap to car ahead - None if leading or lapped
             # interval['interval] is gap to car ahead in seconds
-            if interval['interval'] not in [None, 'None', '+1 LAP']:
-                gap = float(interval['interval'])
-            else:
+            if interval['interval'] is None or isinstance(interval['interval'], str):
                 gap = None
+            else:
+                gap = float(interval['interval'])
 
             # Interval object
             db.add(Interval(
@@ -200,4 +214,7 @@ def fetch_race(year, round_number):
 
         db.commit()
 
+fetch_race(2023, 1)
 fetch_race(2024, 1)
+fetch_race(2025, 1)
+fetch_race(2026, 1)
